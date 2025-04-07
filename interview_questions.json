@@ -1,0 +1,42 @@
+[
+  {
+    "question": "What is the difference between static and dynamic typing in Python, and how does it impact the development process?",
+    "answer": "Static typing means the data type of a variable is determined at compile time, whereas dynamic typing means the data type is determined at runtime. Python is dynamically typed, which allows for more flexibility and faster development. However, it also means that type-related errors may only be caught at runtime, rather than at compile time. This can be mitigated with tools like type hinting and static analysis"
+  },
+  {
+    "question": "How do you optimize the performance of a Python program that is experiencing slow execution?",
+    "answer": "To optimize the performance of a Python program, I would first use profiling tools like cProfile or line_profiler to identify the bottlenecks. Then, I would focus on optimizing the most time-consuming functions using techniques like caching, memoization, or parallel processing. Additionally, I would consider using just-in-time (JIT) compilation with tools like Numba or Cython, or using asynchronous programming with asyncio"
+  },
+  {
+    "question": "What is the difference between the `is` and `==` operators in Python, and when would you use each?",
+    "answer": "The `is` operator checks for object identity, whereas the `==` operator checks for value equality. For example, `a = [1, 2, 3]; b = [1, 2, 3]; a is b` would return False, because `a` and `b` are separate objects, whereas `a == b` would return True, because they have the same value. I would use `is` when checking for object identity, such as checking if an object is None, and `==` for value equality"
+  },
+  {
+    "question": "Can you explain the concept of context managers in Python, and provide an example of how you would use one?",
+    "answer": "A context manager is a class that implements the `__enter__` and `__exit__` methods, which allow for setup and teardown of resources, such as file handles or database connections. The `with` statement is used to create a runtime context for the manager. For example, `with open('file.txt', 'r') as f: print(f.read())` ensures that the file is properly closed after reading, regardless of whether an exception is thrown or not"
+  },
+  {
+    "question": "How do you handle errors and exceptions in Python, and what is your approach to error handling in large-scale applications?",
+    "answer": "I handle errors and exceptions using try-except blocks to catch specific exceptions, and then log or raise the error as needed. In large-scale applications, I would use a combination of try-except blocks, logging, and error tracking tools like Sentry to monitor and respond to errors. I would also follow best practices like fail-fast and crash-only design to ensure that errors are caught and reported quickly"
+  },
+  {
+    "question": "What is the difference between the `append` and `extend` methods in Python, and when would you use each?",
+    "answer": "The `append` method adds a single element to the end of a list, whereas the `extend` method adds multiple elements from a list or other iterable to the end of the list. For example, `a = [1, 2, 3]; a.append(4)` would result in `[1, 2, 3, 4]`, whereas `a.extend([4, 5, 6])` would result in `[1, 2, 3, 4, 5, 6]`. I would use `append` when adding a single element, and `extend` when adding multiple elements"
+  },
+  {
+    "question": "Can you explain the concept of closures in Python, and provide an example of how you would use one?",
+    "answer": "A closure is a function that has access to its own scope and the scope of its parent functions. This allows the function to 'remember' values from its parent scope. For example, `def outer(): x = 10; def inner(): print(x); return inner; f = outer(); f()` would print 10, because the `inner` function has access to the `x` variable from the `outer` function's scope"
+  },
+  {
+    "question": "How do you implement caching in a Python application, and what are the trade-offs to consider?",
+    "answer": "I would implement caching using a cache library like Redis or Memcached, or a built-in cache like functools.lru_cache. The trade-offs to consider include cache invalidation, cache size, and cache timeouts. I would also consider using a cache hierarchy, where a faster but smaller cache is used in front of a slower but larger cache"
+  },
+  {
+    "question": "What is the difference between the `list` and `tuple` data structures in Python, and when would you use each?",
+    "answer": "A `list` is a mutable collection of elements, whereas a `tuple` is an immutable collection of elements. I would use a `list` when I need to modify the collection, such as adding or removing elements, and a `tuple` when I need an immutable collection, such as using it as a dictionary key"
+  },
+  {
+    "question": "Can you explain the concept of decorators in Python, and provide an example of how you would use one?",
+    "answer": "A decorator is a function that takes another function as an argument, and returns a new function that 'wraps' the original function. This allows for code reuse and separation of concerns. For example, `def timer(f): def wrapper(*args, **kwargs): start = time.time(); result = f(*args, **kwargs); print(f'Function {f.__name__} took {time.time() - start} seconds'); return result; return wrapper; @timer; def my_function(): ...` would time the execution of `my_function` and print the result"
+  }
+]
