@@ -21,7 +21,7 @@ if 'job_description_input' not in st.session_state:
     st.session_state.job_description_input = ""
 
 def generate_interview_questions(job_description, model="llama3-70b-8192"):
-    system_prompt = """You are a hiring manager expert. Generate 5 technical interview questions 
+    system_prompt = """You are a hiring manager expert. Generate 6 technical interview questions 
     based on the job description. For each question, provide a sample answer. 
     Return format: JSON array with {question, answer} objects."""
 
@@ -52,7 +52,39 @@ def load_questions():
             return data.get("questions", [])
     except FileNotFoundError:
         return []
+    
+def evaluate_answer_with_llm(user_answer, sample_answer, model="llama3-70b-8192"):
+    """Evaluate user answer against sample using AI semantic analysis"""
+    system_prompt = """You are an expert technical interviewer. Analyze how well the user's answer matches the 
+    sample answer in terms of:
+    1. Technical accuracy
+    2. Key concepts covered
+    3. Depth of understanding
+    4. Relevance to the question
 
+    ** Focus on semantic similarity rather than exact wording. **
+    Return JSON format: {
+        "score": 0-10 (10=excellent match),
+        "feedback": "brief constructive feedback"
+    }
+    feedback answer **Never** contain lines like "response perfectly matches the sample answer","almost identical to the sample answer" 
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"SAMPLE ANSWER: {sample_answer}\nUSER ANSWER: {user_answer}"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        st.error(f"Evaluation error: {str(e)}")
+        return {"score": 0, "feedback": "Evaluation failed"}
+    
 def evaluate_answers():
     try:
         with open('interview_data.json', 'r') as f:
@@ -60,21 +92,25 @@ def evaluate_answers():
             questions = data.get("questions", [])
             
             total_points = 0
-            max_points = len(questions) * 10  # Assuming 10 points per question
+            max_points = len(questions) * 10
             
             for q in questions:
-                # Simple evaluation logic - compare with sample answer
-                # You can implement more sophisticated evaluation
-                if q['user_answer'].lower() in q['answer'].lower():
-                    q['points'] = 10
-                    total_points += 10
-                else:
-                    q['points'] = 5  # Partial credit
-                    total_points += 5
+                user_answer = q.get('user_answer', '').strip()
+                sample_answer = q.get('answer', '').strip()
+                
+                if not user_answer:
+                    q.update({"points": 0, "feedback": "No answer provided"})
+                    continue
+                
+                # AI-powered evaluation
+                evaluation = evaluate_answer_with_llm(user_answer, sample_answer)
+                q['points'] = min(10, max(0, int(evaluation.get('score', 0))))
+                q['feedback'] = evaluation.get('feedback', 'No feedback generated')
+                total_points += q['points']
 
             data['result'] = {
                 'total_points': total_points,
-                'percentage': (total_points / max_points) * 100,
+                'percentage': (total_points / max_points) * 100 if max_points > 0 else 0,
                 'status': 'Pass' if (total_points / max_points) * 100 >= 70 else 'Fail'
             }
             
@@ -82,10 +118,10 @@ def evaluate_answers():
                 json.dump(data, f)
             
             return data['result']
-    except Exception as e:
+    except Exception as e:  
         st.error(f"Evaluation error: {str(e)}")
         return None
-
+    
 # Page 1: Generate Questions
 def page_generate_questions():
     st.header("Generate Interview Questions")
@@ -131,10 +167,9 @@ def page_generate_questions():
     if st.session_state.generated:
         st.subheader("Generated Questions")
         questions = st.session_state.get("questions", load_questions())
-        
+
         for i, q in enumerate(questions, 1):
             st.markdown(f"**Q{i}:** {q['question']}")
-            st.markdown(f"**Sample Answer:** {q['answer']}")
             st.divider()
 # def page_generate_questions():
     # st.header("Generate Interview Questions")
@@ -157,8 +192,6 @@ def page_generate_questions():
     #     else:
     #         st.warning("Please enter a job description")
 
-
-# Page 2: Answer Questions
 def page_answer_questions():
     st.header("Answer Interview Questions")
     questions = load_questions()
@@ -167,11 +200,17 @@ def page_answer_questions():
         st.warning("No questions found. Generate questions first!")
         return
     
-    total_questions = len(questions)
+    # Synchronize answers array with current questions
+    if len(st.session_state.answers) != len(questions):
+        # Preserve existing answers when question count changes
+        old_answers = st.session_state.answers.copy()
+        st.session_state.answers = [""] * len(questions)
+        
+        # Carry over existing answers where possible
+        for i in range(min(len(old_answers), len(questions))):
+            st.session_state.answers[i] = old_answers[i]
     
-    # Initialize answers if not exists
-    if len(st.session_state.answers) != total_questions:
-        st.session_state.answers = [""] * total_questions
+    total_questions = len(questions)
     
     # Navigation controls
     col1, col2, col3 = st.columns([1,1,1])
@@ -196,9 +235,12 @@ def page_answer_questions():
         key=f"answer_{idx}"
     )
     
-    # Submit all answers
-    if all(st.session_state.answers):
-        if st.button("Submit All Answers"):
+    # Check if all answers are filled (dynamic count)
+    all_answered = all(st.session_state.answers)
+    
+    # Always show submit button but indicate readiness
+    if st.button("Submit All Answers", disabled=not all_answered):
+        if all_answered:
             # Update questions with user answers
             for i in range(total_questions):
                 questions[i]['user_answer'] = st.session_state.answers[i]
@@ -207,8 +249,64 @@ def page_answer_questions():
                 json.dump({"questions": questions}, f)
             
             st.success("Answers submitted successfully!")
+        else:
+            st.warning("Please answer all questions before submitting!")
 
-# Page 3: View Results
+    # Show completion status
+    answered_count = sum(1 for ans in st.session_state.answers if ans.strip())
+    st.progress(answered_count / total_questions)
+    st.caption(f"Answered {answered_count}/{total_questions} questions")
+# # Page 2: Answer Questions
+# def page_answer_questions():
+#     st.header("Answer Interview Questions")
+#     questions = load_questions()
+    
+#     if not questions:
+#         st.warning("No questions found. Generate questions first!")
+#         return
+    
+#     total_questions = len(questions)
+    
+#     # Initialize answers if not exists
+#     if len(st.session_state.answers) != total_questions:
+#         st.session_state.answers = [""] * total_questions
+    
+#     # Navigation controls
+#     col1, col2, col3 = st.columns([1,1,1])
+#     with col1:
+#         if st.session_state.current_question > 0:
+#             if st.button("Previous"):
+#                 st.session_state.current_question -= 1
+#     with col3:
+#         if st.session_state.current_question < total_questions - 1:
+#             if st.button("Next"):
+#                 st.session_state.current_question += 1
+    
+#     # Display current question
+#     idx = st.session_state.current_question
+#     st.subheader(f"Question {idx + 1}/{total_questions}")
+#     st.markdown(f"**{questions[idx]['question']}**")
+    
+#     # Answer input
+#     st.session_state.answers[idx] = st.text_area(
+#         "Your Answer",
+#         value=st.session_state.answers[idx],
+#         key=f"answer_{idx}"
+#     )
+    
+#     # Submit all answers
+#     if all(st.session_state.answers):
+#         if st.button("Submit All Answers"):
+#             # Update questions with user answers
+#             for i in range(total_questions):
+#                 questions[i]['user_answer'] = st.session_state.answers[i]
+            
+#             with open('interview_data.json', 'w') as f:
+#                 json.dump({"questions": questions}, f)
+            
+#             st.success("Answers submitted successfully!")
+
+# Update the results display to show feedback
 def page_view_results():
     st.header("Interview Results")
     
@@ -227,7 +325,8 @@ def page_view_results():
             for i, q in enumerate(questions, 1):
                 st.markdown(f"**Q{i}:** {q['question']}")
                 st.markdown(f"**Your Answer:** {q.get('user_answer', 'No answer')}")
-                st.markdown(f"**Points:** {q.get('points', 0)}/10")
+                st.markdown(f"**Score:** {q.get('points', 0)}/10")
+                st.markdown(f"**Feedback:** {q.get('feedback', 'No feedback available')}")
                 st.divider()
 
 # Main App
