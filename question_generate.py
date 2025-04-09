@@ -6,11 +6,27 @@ import streamlit as st
 import tempfile
 import soundfile as sf
 from kokoro import KPipeline
+import pyaudio
+import wave
+import whisper
+import numpy as np
+import time
+import threading
+
+
+# Audio Configuration
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 16000
+CHUNK = 1024
+MAX_RECORD_TIME = 120  # Increased recording time
+SILENCE_THRESHOLD = 500
+SILENCE_TIMEOUT = 5
+TEMP_FILENAME = "response.wav"
 
 load_dotenv()
 
 api_key=os.environ.get("GROQ_API_KEY")
-
 
 client = Groq() 
 
@@ -27,6 +43,74 @@ if "questions_locked" not in st.session_state:
         st.session_state.questions_locked = False
 if "last_locked_jd" not in st.session_state:
     st.session_state.last_locked_jd = ""
+if 'recording' not in st.session_state:
+    st.session_state.recording = False
+if 'stop_event' not in st.session_state:
+    st.session_state.stop_event = threading.Event()
+if 'recording_thread' not in st.session_state:
+    st.session_state.recording_thread = None
+
+@st.cache_resource
+def load_whisper_model():
+    return whisper.load_model("small")
+
+def transcribe_audio(file_path):
+    """Convert speech to text using Whisper"""
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Audio file not found: {file_path}")
+            
+        model = load_whisper_model()
+        result = model.transcribe(file_path, fp16=False, language="en")
+        return result["text"]
+    except Exception as e:
+        st.error(f"Transcription error: {str(e)}")
+        return ""
+
+# Updated Recording Function with Threading
+# Updated audio recording functions
+def record_user_response():
+    audio = pyaudio.PyAudio()
+    stream = audio.open(format=FORMAT, channels=CHANNELS,
+                        rate=RATE, input=True,
+                        frames_per_buffer=CHUNK)
+    
+    print("streamstream", stream)
+
+    frames = []
+    start_time = time.time()
+    last_voice_time = start_time
+
+    while True:
+        data = stream.read(CHUNK, exception_on_overflow=False)
+        audio_chunk = np.frombuffer(data, dtype=np.int16)
+        volume = np.abs(audio_chunk).mean()
+        current_time = time.time()
+
+        print("audio_chunkaudio_chunk", audio_chunk)
+        if volume > SILENCE_THRESHOLD:
+            last_voice_time = current_time
+            frames.append(data)
+        else:
+            frames.append(data)
+
+        if (current_time - last_voice_time) > SILENCE_TIMEOUT:
+            break
+        elif (current_time - start_time) > MAX_RECORD_TIME:
+            break
+
+    stream.stop_stream()
+    stream.close()
+    audio.terminate()
+
+    wf = wave.open(TEMP_FILENAME, 'wb')
+    wf.setnchannels(CHANNELS)
+    wf.setsampwidth(audio.get_sample_size(FORMAT))
+    wf.setframerate(RATE)
+    wf.writeframes(b''.join(frames))
+    wf.close()
+
+    return TEMP_FILENAME
 
 def generate_audio(text, voice='af_heart', speed=1.0):
     """Generate and return audio file path from text"""
@@ -140,7 +224,9 @@ def evaluate_answers():
     except Exception as e:  
         st.error(f"Evaluation error: {str(e)}")
         return None
-    
+
+
+
 # Page 1: Generate Questions
 def page_generate_questions():
     st.header("Generate Interview Questions")
@@ -183,7 +269,7 @@ def page_generate_questions():
     if (generate_btn or regenerate_btn) and not st.session_state.questions_locked:
         if job_desc.strip():
             st.session_state.job_description_input = job_desc
-
+            
             if regenerate_btn:
                 if "questions" in st.session_state:
                     del st.session_state.questions
@@ -232,6 +318,7 @@ def page_generate_questions():
             st.divider()
 
 
+# Modified Answer Page
 def page_answer_questions():
     st.header("Answer Interview Questions")
     questions = load_questions()
@@ -241,15 +328,11 @@ def page_answer_questions():
         return
 
     if len(st.session_state.answers) != len(questions):
-        old_answers = st.session_state.answers.copy()
         st.session_state.answers = [""] * len(questions)
-        for i in range(min(len(old_answers), len(questions))):
-            st.session_state.answers[i] = old_answers[i]
 
-    total_questions = len(questions)
     idx = st.session_state.current_question
-
-    # Navigation
+    
+    # Navigation controls
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         if idx > 0:
@@ -257,50 +340,90 @@ def page_answer_questions():
                 st.session_state.current_question -= 1
                 st.rerun()
     with col3:
-        if idx < total_questions - 1:
+        if idx < len(questions) - 1:
             if st.button("Next"):
                 st.session_state.current_question += 1
                 st.rerun()
 
-    # Question TTS
-    st.subheader(f"Question {idx + 1}/{total_questions}")
-    question_text = questions[idx]['question']
-
-    st.markdown(f"**Question Text:** {question_text}")
-
-
-    # Cache TTS audio path per question
-    # if f"audio_path_{idx}" not in st.session_state:
-    #     st.session_state[f"audio_path_{idx}"] = generate_audio(question_text)
+    # Question Display
+    st.subheader(f"Question {idx + 1}/{len(questions)}")
+    st.markdown(f"**{questions[idx]['question']}**")
     
-    # st.audio(st.session_state[f"audio_path_{idx}"], format='audio/wav', start_time=0)
+    # Audio playback
     audio_path = os.path.join("question_audios", f"q{idx+1}.wav")
     if os.path.exists(audio_path):
         st.audio(audio_path, format='audio/wav')
     else:
-        st.warning("Audio for this question is missing. Please regenerate and lock questions again.")
-    
+        st.warning("Audio missing for this question")
 
-    # Show answer text area after playback
+    # Voice Answer Section
     st.markdown("### Your Answer")
-    st.session_state.answers[idx] = st.text_area(
-        "Type your answer here",
-        value=st.session_state.answers[idx],
-        key=f"answer_{idx}"
-    )
+    
+    # Recording controls
+    col1, col2 = st.columns([4, 1])
+    
+    with col1:
+        answer_text = st.text_area(
+            "Answer will appear here",
+            value=st.session_state.answers[idx],
+            key=f"answer_{idx}",
+            height=150
+        )
+    
+    # Updated answer section in page_answer_questions()
+    with col2:
+        if not st.session_state.recording:
+            if st.button("🎤 Start Recording", key=f"start_{idx}"):
+                st.session_state.recording = True
+                st.session_state.stop_event.clear()
+                st.session_state.recording_thread = threading.Thread(target=record_user_response)
+                st.session_state.recording_thread.start()
+        else:
+            if st.button("⏹️ Stop Recording", key=f"stop_{idx}"):
+                st.session_state.recording = False
+                st.session_state.stop_event.set()
+                st.session_state.recording_thread.join()
+                
+                # Get the recorded file path
+                file_path = os.path.abspath(TEMP_FILENAME)
+                
+                if os.path.exists(file_path):
+                    # Add loading spinner
+                    with st.spinner("Transcribing audio..."):
+                        transcribed_text = transcribe_audio(file_path)
+                        if transcribed_text:
+                            st.session_state.answers[idx] = transcribed_text
+                            st.rerun()
+                        else:
+                            st.error("Failed to transcribe audio")
+                    
+                    # Clean up the audio file
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        st.error(f"Error cleaning up audio file: {str(e)}")
+                else:
+                    st.error("Recording file not found")
 
+    # Store answer in session state
+    st.session_state.answers[idx] = answer_text
+
+    # Submission Section
     all_answered = all(st.session_state.answers)
+    
     if st.button("Submit All Answers", disabled=not all_answered):
-        if all_answered:
-            for i in range(total_questions):
-                questions[i]['user_answer'] = st.session_state.answers[i]
-            with open('interview_data.json', 'w') as f:
-                json.dump({"questions": questions}, f)
-            st.success("Answers submitted successfully!")
+        for i in range(len(questions)):
+            questions[i]['user_answer'] = st.session_state.answers[i]
+        
+        with open('interview_data.json', 'w') as f:
+            json.dump({"questions": questions}, f)
+        
+        st.success("Answers submitted successfully!")
 
+    # Progress indicator
     answered_count = sum(1 for ans in st.session_state.answers if ans.strip())
-    st.progress(answered_count / total_questions)
-    st.caption(f"Answered {answered_count}/{total_questions} questions")
+    st.progress(answered_count / len(questions))
+    st.caption(f"Answered {answered_count}/{len(questions)} questions")
 
 
 # Update the results display to show feedback
