@@ -3,10 +3,14 @@ import json
 from groq import Groq
 from dotenv import load_dotenv
 import streamlit as st
+import tempfile
+import soundfile as sf
+from kokoro import KPipeline
 
 load_dotenv()
 
 api_key=os.environ.get("GROQ_API_KEY")
+
 
 client = Groq() 
 
@@ -19,6 +23,21 @@ if 'generated' not in st.session_state:
     st.session_state.generated = False
 if 'job_description_input' not in st.session_state:
     st.session_state.job_description_input = ""
+if "questions_locked" not in st.session_state:
+        st.session_state.questions_locked = False
+if "last_locked_jd" not in st.session_state:
+    st.session_state.last_locked_jd = ""
+
+def generate_audio(text, voice='af_heart', speed=1.0):
+    """Generate and return audio file path from text"""
+    tts_pipeline = KPipeline(lang_code='a')
+    generator = tts_pipeline(text, voice=voice, speed=speed)
+    audio_data = b''
+    for i, (_, _, audio) in enumerate(generator):
+        audio_data = audio  # Only save last or override with all audio
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    sf.write(temp_file.name, audio_data, 24000)
+    return temp_file.name
 
 def generate_interview_questions(job_description, model="llama3-70b-8192"):
     system_prompt = """You are a hiring manager expert. Generate 6 technical interview questions 
@@ -125,26 +144,46 @@ def evaluate_answers():
 # Page 1: Generate Questions
 def page_generate_questions():
     st.header("Generate Interview Questions")
-    
-    job_desc = st.text_area("Paste Job Description Here", 
-                          value=st.session_state.job_description_input,
-                          height=200,
-                          key="job_desc_input")
-    
+
+    job_desc = st.text_area("Paste Job Description Here",
+                            value=st.session_state.job_description_input,
+                            height=200,
+                            key="job_desc_input")
+
+    jd_changed = job_desc.strip() != st.session_state.job_description_input.strip()
+
+    # If JD has changed, unlock
+    if jd_changed:
+        st.session_state.questions_locked = False
+        st.session_state.generated = False
+        st.session_state.last_locked_jd = ""
+        if "questions" in st.session_state:
+            del st.session_state.questions
+        open('interview_data.json', 'w').close()
+
     col1, col2 = st.columns([1, 3])
-    with col1:
-        generate_btn = st.button("Generate Questions")
-    
-    # Only show regenerate button if questions have been generated before
+
+    # Buttons — disable if locked
+    generate_btn = col1.button("Generate Questions",
+                               disabled=st.session_state.generated or st.session_state.questions_locked)
+
     regenerate_btn = False
+    lock_btn = False
+
     if st.session_state.generated:
         with col2:
-            regenerate_btn = st.button("Regenerate Questions")
-    
-    if generate_btn or regenerate_btn:
+            col2a, col2b = st.columns([1, 1])
+            if st.session_state.questions_locked:
+                pass
+            else:
+                regenerate_btn = col2a.button("Regenerate Questions", disabled=st.session_state.questions_locked)
+                lock_btn = col2b.button("Lock Questions", disabled=st.session_state.questions_locked)
+
+    # Generate or Regenerate
+    if (generate_btn or regenerate_btn) and not st.session_state.questions_locked:
         if job_desc.strip():
             st.session_state.job_description_input = job_desc
-            
+
             if regenerate_btn:
                 if "questions" in st.session_state:
                     del st.session_state.questions
@@ -156,14 +195,34 @@ def page_generate_questions():
                 save_questions(questions)
                 st.session_state.generated = True
                 st.session_state.questions = questions
-                st.success("Questions generated successfully!" if generate_btn 
-                         else "Questions regenerated successfully!")
+                st.success("Questions generated successfully!" if generate_btn else "Questions regenerated successfully!")
                 st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
             else:
                 st.error("Failed to generate questions")
         else:
             st.warning("Please enter a job description")
 
+    # Locking
+    if lock_btn:
+        with st.spinner("Locking questions and generating audio..."):
+            st.session_state.questions_locked = True
+            st.session_state.last_locked_jd = job_desc.strip()
+
+            # Generate audio for each question
+            audio_dir = "question_audios"
+            os.makedirs(audio_dir, exist_ok=True)
+            questions = st.session_state.get("questions", load_questions())
+            for i, q in enumerate(questions):
+                audio_path = os.path.join(audio_dir, f"q{i+1}.wav")
+                audio_path_generated = generate_audio(q["question"])
+                os.replace(audio_path_generated, audio_path)
+
+            st.success("Questions locked. Change the job description to unlock and regenerate.")
+
+
+        st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
+        
+    # Show questions
     if st.session_state.generated:
         st.subheader("Generated Questions")
         questions = st.session_state.get("questions", load_questions())
@@ -171,26 +230,7 @@ def page_generate_questions():
         for i, q in enumerate(questions, 1):
             st.markdown(f"**Q{i}:** {q['question']}")
             st.divider()
-# def page_generate_questions():
-    # st.header("Generate Interview Questions")
-    # job_desc = st.text_area("Paste Job Description Here", height=200)
-    
-    # if st.button("Generate Questions"):
-    #     if job_desc.strip():
-    #         questions = generate_interview_questions(job_desc)
-    #         if questions:
-    #             save_questions(questions)
-    #             st.session_state.generated = True
-    #             st.success("Questions generated successfully!")
-                
-    #             st.subheader("Generated Questions")
-    #             for i, q in enumerate(questions, 1):
-    #                 st.markdown(f"**Q{i}:** {q['question']}")
-    #                 st.markdown(f"**Sample Answer:** {q['answer']}")
-    #         else:
-    #             st.error("Failed to generate questions")
-    #     else:
-    #         st.warning("Please enter a job description")
+
 
 def page_answer_questions():
     st.header("Answer Interview Questions")
@@ -199,112 +239,69 @@ def page_answer_questions():
     if not questions:
         st.warning("No questions found. Generate questions first!")
         return
-    
-    # Synchronize answers array with current questions
+
     if len(st.session_state.answers) != len(questions):
-        # Preserve existing answers when question count changes
         old_answers = st.session_state.answers.copy()
         st.session_state.answers = [""] * len(questions)
-        
-        # Carry over existing answers where possible
         for i in range(min(len(old_answers), len(questions))):
             st.session_state.answers[i] = old_answers[i]
-    
+
     total_questions = len(questions)
-    
-    # Navigation controls
-    col1, col2, col3 = st.columns([1,1,1])
+    idx = st.session_state.current_question
+
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        if st.session_state.current_question > 0:
+        if idx > 0:
             if st.button("Previous"):
                 st.session_state.current_question -= 1
+                st.rerun()
     with col3:
-        if st.session_state.current_question < total_questions - 1:
+        if idx < total_questions - 1:
             if st.button("Next"):
                 st.session_state.current_question += 1
-    
-    # Display current question
-    idx = st.session_state.current_question
+                st.rerun()
+
+    # Question TTS
     st.subheader(f"Question {idx + 1}/{total_questions}")
-    st.markdown(f"**{questions[idx]['question']}**")
+    question_text = questions[idx]['question']
+
+    st.markdown(f"**Question Text:** {question_text}")
+
+
+    # Cache TTS audio path per question
+    # if f"audio_path_{idx}" not in st.session_state:
+    #     st.session_state[f"audio_path_{idx}"] = generate_audio(question_text)
     
-    # Answer input
+    # st.audio(st.session_state[f"audio_path_{idx}"], format='audio/wav', start_time=0)
+    audio_path = os.path.join("question_audios", f"q{idx+1}.wav")
+    if os.path.exists(audio_path):
+        st.audio(audio_path, format='audio/wav')
+    else:
+        st.warning("Audio for this question is missing. Please regenerate and lock questions again.")
+    
+
+    # Show answer text area after playback
+    st.markdown("### Your Answer")
     st.session_state.answers[idx] = st.text_area(
-        "Your Answer",
+        "Type your answer here",
         value=st.session_state.answers[idx],
         key=f"answer_{idx}"
     )
-    
-    # Check if all answers are filled (dynamic count)
+
     all_answered = all(st.session_state.answers)
-    
-    # Always show submit button but indicate readiness
     if st.button("Submit All Answers", disabled=not all_answered):
         if all_answered:
-            # Update questions with user answers
             for i in range(total_questions):
                 questions[i]['user_answer'] = st.session_state.answers[i]
-            
             with open('interview_data.json', 'w') as f:
                 json.dump({"questions": questions}, f)
-            
             st.success("Answers submitted successfully!")
-        else:
-            st.warning("Please answer all questions before submitting!")
 
-    # Show completion status
     answered_count = sum(1 for ans in st.session_state.answers if ans.strip())
     st.progress(answered_count / total_questions)
     st.caption(f"Answered {answered_count}/{total_questions} questions")
-# # Page 2: Answer Questions
-# def page_answer_questions():
-#     st.header("Answer Interview Questions")
-#     questions = load_questions()
-    
-#     if not questions:
-#         st.warning("No questions found. Generate questions first!")
-#         return
-    
-#     total_questions = len(questions)
-    
-#     # Initialize answers if not exists
-#     if len(st.session_state.answers) != total_questions:
-#         st.session_state.answers = [""] * total_questions
-    
-#     # Navigation controls
-#     col1, col2, col3 = st.columns([1,1,1])
-#     with col1:
-#         if st.session_state.current_question > 0:
-#             if st.button("Previous"):
-#                 st.session_state.current_question -= 1
-#     with col3:
-#         if st.session_state.current_question < total_questions - 1:
-#             if st.button("Next"):
-#                 st.session_state.current_question += 1
-    
-#     # Display current question
-#     idx = st.session_state.current_question
-#     st.subheader(f"Question {idx + 1}/{total_questions}")
-#     st.markdown(f"**{questions[idx]['question']}**")
-    
-#     # Answer input
-#     st.session_state.answers[idx] = st.text_area(
-#         "Your Answer",
-#         value=st.session_state.answers[idx],
-#         key=f"answer_{idx}"
-#     )
-    
-#     # Submit all answers
-#     if all(st.session_state.answers):
-#         if st.button("Submit All Answers"):
-#             # Update questions with user answers
-#             for i in range(total_questions):
-#                 questions[i]['user_answer'] = st.session_state.answers[i]
-            
-#             with open('interview_data.json', 'w') as f:
-#                 json.dump({"questions": questions}, f)
-            
-#             st.success("Answers submitted successfully!")
+
 
 # Update the results display to show feedback
 def page_view_results():
