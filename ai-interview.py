@@ -12,8 +12,8 @@ import whisper
 import numpy as np
 import time
 import threading
-
-
+from st_audiorec import st_audiorec
+import base64
 # Audio Configuration
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -67,51 +67,7 @@ def transcribe_audio(file_path):
         st.error(f"Transcription error: {str(e)}")
         return ""
 
-# Updated Recording Function with Threading
-# Updated audio recording functions
-def record_user_response():
-    audio = pyaudio.PyAudio()
-    stream = audio.open(format=FORMAT, channels=CHANNELS,
-                        rate=RATE, input=True,
-                        frames_per_buffer=CHUNK)
     
-    print("streamstream", stream)
-
-    frames = []
-    start_time = time.time()
-    last_voice_time = start_time
-
-    while True:
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        audio_chunk = np.frombuffer(data, dtype=np.int16)
-        volume = np.abs(audio_chunk).mean()
-        current_time = time.time()
-
-        print("audio_chunkaudio_chunk", audio_chunk)
-        if volume > SILENCE_THRESHOLD:
-            last_voice_time = current_time
-            frames.append(data)
-        else:
-            frames.append(data)
-
-        if (current_time - last_voice_time) > SILENCE_TIMEOUT:
-            break
-        elif (current_time - start_time) > MAX_RECORD_TIME:
-            break
-
-    stream.stop_stream()
-    stream.close()
-    audio.terminate()
-
-    wf = wave.open(TEMP_FILENAME, 'wb')
-    wf.setnchannels(CHANNELS)
-    wf.setsampwidth(audio.get_sample_size(FORMAT))
-    wf.setframerate(RATE)
-    wf.writeframes(b''.join(frames))
-    wf.close()
-
-    return TEMP_FILENAME
-
 def generate_audio(text, voice='af_heart', speed=1.0):
     """Generate and return audio file path from text"""
     tts_pipeline = KPipeline(lang_code='a')
@@ -358,55 +314,27 @@ def page_answer_questions():
 
     # Voice Answer Section
     st.markdown("### Your Answer")
-    
-    # Recording controls
-    col1, col2 = st.columns([4, 1])
-    
-    with col1:
-        answer_text = st.text_area(
-            "Answer will appear here",
-            value=st.session_state.answers[idx],
-            key=f"answer_{idx}",
-            height=150
-        )
-    
-    # Updated answer section in page_answer_questions()
-    with col2:
-        if not st.session_state.recording:
-            if st.button("🎤 Start Recording", key=f"start_{idx}"):
-                st.session_state.recording = True
-                st.session_state.stop_event.clear()
-                st.session_state.recording_thread = threading.Thread(target=record_user_response)
-                st.session_state.recording_thread.start()
-        else:
-            if st.button("⏹️ Stop Recording", key=f"stop_{idx}"):
-                st.session_state.recording = False
-                st.session_state.stop_event.set()
-                st.session_state.recording_thread.join()
-                
-                # Get the recorded file path
-                file_path = os.path.abspath(TEMP_FILENAME)
-                
-                if os.path.exists(file_path):
-                    # Add loading spinner
-                    with st.spinner("Transcribing audio..."):
-                        transcribed_text = transcribe_audio(file_path)
-                        if transcribed_text:
-                            st.session_state.answers[idx] = transcribed_text
-                            st.rerun()
-                        else:
-                            st.error("Failed to transcribe audio")
-                    
-                    # Clean up the audio file
-                    try:
-                        os.remove(file_path)
-                    except Exception as e:
-                        st.error(f"Error cleaning up audio file: {str(e)}")
-                else:
-                    st.error("Recording file not found")
 
-    # Store answer in session state
-    st.session_state.answers[idx] = answer_text
+    # Recording and transcription
+    result = st_audiorec()
+    
+    if result is not None:
+        file_path, transcription = result
+
+        if transcription:
+            st.session_state.answers[idx] = transcription
+            st.success("Transcription received!")
+       
+        
+    else:
+        transcription = st.session_state.answers[idx]  # fallback to existing if available
+    
+    # Text area with current transcription
+    answer_text = st.text_area(
+        "Answer will appear here",
+        transcription,
+    )
+    st.session_state.answers[idx] = answer_text  # store answer from text area
 
     # Submission Section
     all_answered = all(st.session_state.answers)
@@ -420,10 +348,7 @@ def page_answer_questions():
         
         st.success("Answers submitted successfully!")
 
-    # Progress indicator
-    answered_count = sum(1 for ans in st.session_state.answers if ans.strip())
-    st.progress(answered_count / len(questions))
-    st.caption(f"Answered {answered_count}/{len(questions)} questions")
+
 
 
 # Update the results display to show feedback

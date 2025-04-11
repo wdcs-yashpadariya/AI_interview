@@ -1,0 +1,47 @@
+import streamlit as st
+import streamlit.components.v1 as components
+
+import os
+import numpy as np
+from io import BytesIO
+import whisper
+import tempfile
+
+def st_audiorec():
+    # get parent directory relative to current directory
+    parent_dir = os.path.dirname(os.path.abspath(__file__))
+    # Custom REACT-based component for recording client audio in browser
+    build_dir = os.path.join(parent_dir, "frontend/build")
+    # specify directory and initialize st_audiorec object functionality
+    st_audiorec = components.declare_component("st_audiorec", path=build_dir)
+
+    # Create an instance of the component: STREAMLIT AUDIO RECORDER
+    raw_audio_data = st_audiorec()  # raw_audio_data: stores all the data returned from the streamlit frontend
+    wav_bytes = None                # wav_bytes: contains the recorded audio in .WAV format after conversion
+
+    # the frontend returns raw audio data in the form of arraybuffer
+    # (this arraybuffer is derived from web-media API WAV-blob data)
+
+    if isinstance(raw_audio_data, dict):  # retrieve audio data
+        with st.spinner('retrieving audio-recording...'):
+            ind, raw_audio_data = zip(*raw_audio_data['arr'].items())
+            ind = np.array(ind, dtype=int)  # convert to np array
+            raw_audio_data = np.array(raw_audio_data)  # convert to np array
+            sorted_ints = raw_audio_data[ind]
+            stream = BytesIO(b"".join([int(v).to_bytes(1, "big") for v in sorted_ints]))
+            # wav_bytes contains audio data in byte format, ready to be processed further
+            wav_bytes = stream.read()
+
+    # Save the wav_bytes to a temporary file
+    if wav_bytes:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tmp_file.write(wav_bytes)
+            temp_audio_path = tmp_file.name  # Store the temporary file path
+
+        # Use Whisper model to transcribe the audio
+        model = whisper.load_model("base")  # You can use other model sizes like "tiny", "small", "large", etc.
+        result = model.transcribe(temp_audio_path)
+        transcribed_text = result["text"]
+
+        return temp_audio_path, transcribed_text  # Return audio file path and transcribed text
+    return None, None  # If no audio was recorded, return None
