@@ -6,7 +6,7 @@ import streamlit as st
 import tempfile
 import soundfile as sf
 from kokoro import KPipeline
-import pyaudio
+# import pyaudio
 import wave
 import whisper
 import numpy as np
@@ -14,8 +14,11 @@ import time
 import threading
 from st_audiorec import st_audiorec
 import base64
+import subprocess
+from streamlit_ace import st_ace #type:ignore
+
 # Audio Configuration
-FORMAT = pyaudio.paInt16
+# FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000
 CHUNK = 1024
@@ -40,7 +43,7 @@ if 'generated' not in st.session_state:
 if 'job_description_input' not in st.session_state:
     st.session_state.job_description_input = ""
 if "questions_locked" not in st.session_state:
-        st.session_state.questions_locked = False
+    st.session_state.questions_locked = False
 if "last_locked_jd" not in st.session_state:
     st.session_state.last_locked_jd = ""
 if 'recording' not in st.session_state:
@@ -49,23 +52,6 @@ if 'stop_event' not in st.session_state:
     st.session_state.stop_event = threading.Event()
 if 'recording_thread' not in st.session_state:
     st.session_state.recording_thread = None
-
-@st.cache_resource
-def load_whisper_model():
-    return whisper.load_model("small")
-
-def transcribe_audio(file_path):
-    """Convert speech to text using Whisper"""
-    try:
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Audio file not found: {file_path}")
-            
-        model = load_whisper_model()
-        result = model.transcribe(file_path, fp16=False, language="en")
-        return result["text"]
-    except Exception as e:
-        st.error(f"Transcription error: {str(e)}")
-        return ""
 
     
 def generate_audio(text, voice='af_heart', speed=1.0):
@@ -80,9 +66,54 @@ def generate_audio(text, voice='af_heart', speed=1.0):
     return temp_file.name
 
 def generate_interview_questions(job_description, model="llama3-70b-8192"):
-    system_prompt = """You are a hiring manager expert. Generate 6 technical interview questions 
-    based on the job description. For each question, provide a sample answer. 
-    Return format: JSON array with {question, answer} objects."""
+    system_prompt = """You are a technical hiring manager expert. Generate 5 interview questions (mix of technical concepts and coding problems) based on the job description. 
+Follow these guidelines:
+2. Ensure **no repetition of concepts, topics, or patterns** across the questions.
+3. For conceptual questions:
+   - Cover different areas of Job role 
+   - Provide a concise sample answer
+4. For coding questions:
+   - Make them **language-agnostic** (suitable for any programming language)
+   - Focus on algorithmic thinking and logic, **not** on syntax
+   - Provide **no solutions**
+   - Include clear input/output examples 
+
+# Prioritize fundamental problems that test programming logic: 
+# - Array/string manipulation 
+# - Basic data structures 
+# - Simple algorithms 
+# - Problem decomposition 
+# - Also u can genrate question based on Job role or Job description
+
+Important:
+- Avoid repeating the same types of problems or rephrasing similar ones.
+
+
+
+Return format: must be JSON array with objects containing: 
+- For conceptual questions: {"type": "concept", "question": "", "answer": ""} 
+- For coding questions: {"type": "coding", "question": "", "input_example": "", "output_example": ""}
+
+Your goal: generate **diverse, job-relevant**, and well-scoped questions.
+"""
+
+# system_prompt = """You are a technical hiring manager expert. Generate 5 interview questions (mix of technical concepts and coding problems) based on the job description. 
+# Follow these guidelines: 
+# 1. For conceptual questions: provide a sample answer 
+# 2. For coding questions: - Make them language-agnostic (can be implemented in any programming language)
+#  - Focus on logic/algorithms rather than language-specific features 
+#  - Do NOT provide solutions (since we don't know the candidate's preferred language) 
+#  - Include clear input/output examples 
+# Return format: must be JSON array with objects containing: 
+# - For conceptual questions: {"type": "concept", "question": "", "answer": ""} 
+# - For coding questions: {"type": "coding", "question": "", "input_example": "", "output_example": ""}
+# Prioritize fundamental problems that test programming logic: 
+# - Array/string manipulation 
+# - Basic data structures 
+# - Simple algorithms 
+# - Problem decomposition 
+# - Also u can genrate question based on Job role or Job description """
+
 
     try:
         response = client.chat.completions.create(
@@ -91,7 +122,8 @@ def generate_interview_questions(job_description, model="llama3-70b-8192"):
                 {"role": "user", "content": job_description}
             ],
             model=model,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            temperature=0.5,
         )
 
         content = json.loads(response.choices[0].message.content)
@@ -114,20 +146,54 @@ def load_questions():
     
 def evaluate_answer_with_llm(user_answer, sample_answer, model="llama3-70b-8192"):
     """Evaluate user answer against sample using AI semantic analysis"""
-    system_prompt = """You are an expert technical interviewer. Analyze how well the user's answer matches the 
-    sample answer in terms of:
-    1. Technical accuracy
-    2. Key concepts covered
-    3. Depth of understanding
-    4. Relevance to the question
+    system_prompt = """You are an expert technical interviewer. Evaluate user responses differently based on question type:
 
-    ** Focus on semantic similarity rather than exact wording. **
-    Return JSON format: {
-        "score": 0-10 (10=excellent match),
-        "feedback": "brief constructive feedback"
-    }
-    feedback answer **Never** contain lines like "response perfectly matches the sample answer","almost identical to the sample answer" 
-    """
+For CONCEPTUAL QUESTIONS (type="concept"):
+1. Technical accuracy
+2. Key concepts covered
+3. Depth of understanding
+4. Relevance to the question
+** Focus on semantic similarity rather than exact wording **
+
+For CODING QUESTIONS (type="coding"):
+1. Functional correctness (test against 3-5 edge cases)
+2. Algorithmic efficiency
+3. Code readability/structure
+4. Explanation clarity (if provided)
+5. Language-agnostic best practices
+
+EVALUATION RULES:
+- Never use phrases like "perfect match" or "identical to sample"
+- For coding: Generate test cases based on the problem statement
+- Adapt feedback to the user's implementation language
+- Your feedback should include any grammar mistakes in concept tupe question with corrections, and point out technical deficiencies based on question along with suggestions for improvement. 
+- Provide detailed feedback of candidate answer (no limits for length)  
+- Penalize hardcoded solutions passing only given examples
+
+**Don't cut the score for grammar mistake**
+
+Return JSON format: {
+    "score": 0-10 (10=excellent),
+    "feedback": "constructive feedback",
+    "test_cases": [{"input": "", "output": "", "passed": bool}] (coding only),
+    "language": "detected_programming_language" (coding only)
+}
+
+EXAMPLE CODING EVALUATION:
+Input Question: "Write a function that checks if a string is a palindrome"
+User Code: "def is_pal(s): return s == s[::-1]"
+Response:
+{
+    "score": 9,
+    "feedback": "Solution correctly implements palindrome check but could handle case sensitivity. Consider edge cases like empty strings.",
+    "test_cases": [
+        {"input": "'racecar'", "output": "True", "passed": true},
+        {"input": "'Racecar'", "output": "False", "passed": true},
+        {"input": "''", "output": "True", "passed": true}
+    ],
+    "language": "Python"
+}
+"""
 
     try:
         response = client.chat.completions.create(
@@ -154,8 +220,8 @@ def evaluate_answers():
             max_points = len(questions) * 10
             
             for q in questions:
-                user_answer = q.get('user_answer', '').strip()
-                sample_answer = q.get('answer', '').strip()
+                user_answer = q.get('user_answer', '')
+                sample_answer = q.get('answer', '')
                 
                 if not user_answer:
                     q.update({"points": 0, "feedback": "No answer provided"})
@@ -180,8 +246,6 @@ def evaluate_answers():
     except Exception as e:  
         st.error(f"Evaluation error: {str(e)}")
         return None
-
-
 
 # Page 1: Generate Questions
 def page_generate_questions():
@@ -273,8 +337,66 @@ def page_generate_questions():
             st.markdown(f"**Q{i}:** {q['question']}")
             st.divider()
 
+def execute_code(language, code):
+    result = {"output": "", "error": ""}
+    
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            if language == "python":
+                with open(os.path.join(temp_dir, "code.py"), "w") as f:
+                    f.write(code)
+                process = subprocess.run(
+                    ["python3", os.path.join(temp_dir, "code.py")],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            elif language == "c":
+                with open(os.path.join(temp_dir, "code.c"), "w") as f:
+                    f.write(code)
+                compile_process = subprocess.run(
+                    ["gcc", os.path.join(temp_dir, "code.c"), "-o", os.path.join(temp_dir, "out")],
+                    capture_output=True,
+                    text=True
+                )
+                if compile_process.returncode != 0:
+                    result["error"] = compile_process.stderr
+                    return result
+                process = subprocess.run(
+                    [os.path.join(temp_dir, "out")],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            elif language == "java":
+                with open(os.path.join(temp_dir, "Main.java"), "w") as f:
+                    f.write(code)
+                compile_process = subprocess.run(
+                    ["javac", os.path.join(temp_dir, "Main.java")],
+                    capture_output=True,
+                    text=True
+                )
+                if compile_process.returncode != 0:
+                    result["error"] = compile_process.stderr
+                    return result
+                process = subprocess.run(
+                    ["java", "-cp", temp_dir, "Main"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
 
-# Modified Answer Page
+            result["output"] = process.stdout
+            result["error"] = process.stderr
+
+    except subprocess.TimeoutExpired:
+        result["error"] = "Execution timed out"
+    except Exception as e:
+        result["error"] = str(e)
+    
+    return result
+
+# Page 2: Answer The Questions
 def page_answer_questions():
     st.header("Answer Interview Questions")
     questions = load_questions()
@@ -303,43 +425,91 @@ def page_answer_questions():
 
     # Question Display
     st.subheader(f"Question {idx + 1}/{len(questions)}")
-    st.markdown(f"**{questions[idx]['question']}**")
-    
-    # Audio playback
+    current_q = questions[idx]
+    st.markdown(f"**{current_q['question']}**")
+
+    # Audio of current question
     audio_path = os.path.join("question_audios", f"q{idx+1}.wav")
     if os.path.exists(audio_path):
-        st.audio(audio_path, format='audio/wav')
+        st.audio(audio_path, format='audio/wav',autoplay=True)
     else:
         st.warning("Audio missing for this question")
-
-    # Voice Answer Section
-    st.markdown("### Your Answer")
-
-    # Recording and transcription
-    result = st_audiorec()
     
-    if result is not None:
-        file_path, transcription = result
-
-        if transcription:
-            st.session_state.answers[idx] = transcription
-            st.success("Transcription received!")
-       
+    # Show input/output examples if coding question
+    if current_q.get('type') == 'coding':
+     
+        if 'input_example' in current_q:
+            st.markdown(f"*Input Example:* `{current_q['input_example']}`")
+        if 'output_example' in current_q:
+            st.markdown(f"*Expected Output:* `{current_q['output_example']}`")
         
-    else:
-        transcription = st.session_state.answers[idx]  # fallback to existing if available
-    
-    # Text area with current transcription
-    answer_text = st.text_area(
-        "Answer will appear here",
-        transcription,
-    )
-    st.session_state.answers[idx] = answer_text  # store answer from text area
+        # Empty code block (you'll paste your implementation here)
+        # Streamlit UI
+        st.title("Code Editor")
 
-    # Submission Section
-    all_answered = all(st.session_state.answers)
+        # Language selection
+        language = st.selectbox("Select Language", ["python", "c", "java"])
+        theme = st.selectbox("Select Theme", ["chrome", "twilight", "github"])
+        font_size = st.slider("Font Size", 10, 24, 18)
+
+        # Code editor
+        code = st_ace(
+            placeholder="Write your code here...",
+            language=language,
+            theme=theme,
+            key=f"editor{language}",
+            font_size=font_size,
+            min_lines=30,
+            keybinding="vscode",
+            
+        )
+
+        if st.button("Run Code"):
+            if code.strip() == "":
+                st.error("Please write some code first")
+            else:
+                result = execute_code(language, code)
+                
+                if result["error"]:
+                    st.error("Execution Error:")
+                    st.code(result["error"], language="bash")
+                else:
+                    st.success("Output:")
+                    st.code(result["output"], language="bash")
+
+        if st.button("Submit Code"):
+            st.subheader("Submitted Code")
+            st.code(code, language=language) # Empty code block
+            st.session_state.answers[idx] = code if code.strip() != None else "NA"
     
-    if st.button("Submit All Answers", disabled=not all_answered):
+    # Audio playback (for conceptual questions only)
+    if current_q.get('type') != 'coding':
+    
+        # Voice Answer Section for conceptual questions
+        st.markdown("### Your Answer")
+        
+        # Recording and transcription
+        result = st_audiorec()
+        
+        if result is not None:
+            file_path, transcription = result
+            if transcription:
+                st.session_state.answers[idx] = transcription
+                st.success("Transcription received!")
+        else:
+            transcription = st.session_state.answers[idx]  # fallback to existing if available
+        
+        # Text area with current transcription
+        answer_text = st.text_area(
+            "Answer will appear here",
+            transcription,
+        )
+        if answer_text:
+            st.session_state.answers[idx] = answer_text 
+        else:
+            st.session_state.answers[idx] = "NA"
+
+    if st.button("Submit All Answers"):
         for i in range(len(questions)):
             questions[i]['user_answer'] = st.session_state.answers[i]
         
@@ -348,10 +518,7 @@ def page_answer_questions():
         
         st.success("Answers submitted successfully!")
 
-
-
-
-# Update the results display to show feedback
+# Page 3: Results display to show feedback
 def page_view_results():
     st.header("Interview Results")
     
