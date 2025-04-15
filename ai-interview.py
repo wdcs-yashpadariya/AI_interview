@@ -29,7 +29,7 @@ TEMP_FILENAME = "response.wav"
 
 load_dotenv()
 
-api_key=os.environ.get("GROQ_API_KEY")
+api_key="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"
 
 client = Groq() 
 
