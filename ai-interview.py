@@ -8,7 +8,7 @@ import soundfile as sf
 from kokoro import KPipeline
 # import pyaudio
 import wave
-import whisper
+# import whisper
 import numpy as np
 import time
 import threading
