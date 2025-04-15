@@ -28,8 +28,8 @@ SILENCE_TIMEOUT = 5
 TEMP_FILENAME = "response.wav"
 
 load_dotenv()
-
-api_key="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"
+GROQ_API_KEY="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"
+api_key=GROQ_API_KEY
 
 client = Groq() 
 
