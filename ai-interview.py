@@ -6,14 +6,9 @@ import streamlit as st
 import tempfile
 import soundfile as sf
 from kokoro import KPipeline
-# import pyaudio
-import wave
-# import whisper
 import numpy as np
-import time
 import threading
 from st_audiorec import st_audiorec
-import base64
 import subprocess
 from streamlit_ace import st_ace #type:ignore
 
@@ -28,8 +23,9 @@ SILENCE_TIMEOUT = 5
 TEMP_FILENAME = "response.wav"
 
 load_dotenv()
-GROQ_API_KEY="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"
-api_key=GROQ_API_KEY
+
+
+api_key=os.environ.get("GROQ_API_KEY")
 
 client = Groq() 
 
