@@ -13,7 +13,6 @@ import subprocess
 from streamlit_ace import st_ace #type:ignore
 
 # Audio Configuration
-# FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000
 CHUNK = 1024
