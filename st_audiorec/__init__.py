@@ -31,17 +31,5 @@ def st_audiorec():
             stream = BytesIO(b"".join([int(v).to_bytes(1, "big") for v in sorted_ints]))
             # wav_bytes contains audio data in byte format, ready to be processed further
             wav_bytes = stream.read()
-
-    # Save the wav_bytes to a temporary file
-    if wav_bytes:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-            tmp_file.write(wav_bytes)
-            temp_audio_path = tmp_file.name  # Store the temporary file path
-
-        # Use Whisper model to transcribe the audio
-        model = whisper.load_model("base")  # You can use other model sizes like "tiny", "small", "large", etc.
-        result = model.transcribe(temp_audio_path)
-        transcribed_text = result["text"]
-
-        return temp_audio_path, transcribed_text  # Return audio file path and transcribed text
-    return None, None  # If no audio was recorded, return None
+            
+    return wav_bytes
